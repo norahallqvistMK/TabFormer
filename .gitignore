@@ -1,0 +1,14 @@
+__pycache__/
+results/
+*.pyc
+*.pyo
+*.pyd
+*.pkl
+*.pkl.gz
+*.pt
+*.zip
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.tar.lzma
+*.tar.lz        
