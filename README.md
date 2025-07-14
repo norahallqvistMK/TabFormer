@@ -39,11 +39,9 @@ For PRSA dataset, one have to download the PRSA dataset from [Kaggle](https://ww
 ---
 
 ### Pretrain Tabular BERT
-To train a tabular BERT model on credit card transaction or PRSA dataset run :
+To train a tabular BERT model on credit card transaction:
 ```
-$ python main.py --do_train --mlm --field_ce --lm_type bert \
-                 --field_hs 64 --data_type [prsa/card] \
-                 --output_dir [output_dir]
+$ bash train.sh
 ```
 
 

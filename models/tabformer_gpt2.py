@@ -1,6 +1,7 @@
 from torch.nn import CrossEntropyLoss
 
-from transformers.modeling_gpt2 import GPT2LMHeadModel
+from transformers.models.gpt2.modeling_gpt2 import GPT2LMHeadModel
+# TODO: replace with flash_attn GPTLMHeadModel
 
 
 class TabFormerGPT2LMHeadModel(GPT2LMHeadModel):
@@ -20,9 +21,10 @@ class TabFormerGPT2LMHeadModel(GPT2LMHeadModel):
             labels=None,
             use_cache=True,
     ):
+    
         transformer_outputs = self.transformer(
             input_ids,
-            past=past,
+            past_key_values=past,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
             position_ids=position_ids,

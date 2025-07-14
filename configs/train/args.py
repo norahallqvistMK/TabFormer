@@ -1,13 +1,34 @@
 import argparse
 
-
 def define_main_parser(parser=None):
     if parser is None:
         parser = argparse.ArgumentParser()
 
+    parser.add_argument("--pooling_strategy", type=str,
+                            default="mean",
+                            help="pooling strategy of output embedding of encoder: mean[default]")  
+    parser.add_argument("--path_to_checkpoint", type=str,
+                            default="results",
+                            help="path to where saved checkpoint exists")  
+    parser.add_argument("--hidden_size", type=int,
+                            default=768,
+                            help="output dim of embedding: [default]")  
+    parser.add_argument("--num_layers_lstm", type=int,
+                            default=1,
+                            help="number lstm layers: 1[default]")  
+    parser.add_argument("--equal_parameters_baselines", type=bool,
+                            default=True,
+                            help="use equal parameters for baselines: false[default]")  
+    parser.add_argument("--seq_len", type=int,
+                        default=10,
+                        help="number of transactions in sequence: 10[default]")
+    parser.add_argument("--model_type", type=str,
+                    default="lstm",
+                    help="downstream model type: lstm[default]")
+    parser.add_argument('--use_embeddings', action='store_true')    
     parser.add_argument("--jid", type=int,
-                        default=1,
-                        help="job id: 1[default] used for job queue")
+                            default=1,
+                            help="job id: 1[default] used for job queue")
     parser.add_argument("--seed", type=int,
                         default=9,
                         help="seed to use: 9[default]")
@@ -24,9 +45,7 @@ def define_main_parser(parser=None):
                         default=0.15,
                         help="mask mlm_probability")
 
-    parser.add_argument("--data_type", type=str,
-                        default="card", choices=['card', 'prsa'],
-                        help='root directory for files')
+
     parser.add_argument("--data_root", type=str,
                         default="./data/credit_card/",
                         help='root directory for files')
@@ -59,7 +78,7 @@ def define_main_parser(parser=None):
     parser.add_argument("--do_eval", action='store_true',
                         help="enable evaluation flag")
     parser.add_argument("--save_steps", type=int,
-                        default=50,
+                        default=500,
                         help="set checkpointing")
     parser.add_argument("--num_train_epochs", type=int,
                         default=3,
@@ -73,6 +92,8 @@ def define_main_parser(parser=None):
                         help="hidden size for transaction transformer")
     parser.add_argument("--skip_user", action='store_true',
                         help="if user field to be skipped or added (default add)")
+    
     parser.add_argument("--batch_size", type=int, default=8, help="batch size per device")
+
 
     return parser

@@ -5,10 +5,13 @@ from transformers import (
     BertTokenizer,
     BertForMaskedLM,
     GPT2Config,
-    GPT2LMHeadModel
+    GPT2LMHeadModel,
+    PreTrainedTokenizerFast,
+    GPT2Tokenizer,
+    PreTrainedTokenizer,
+    AutoTokenizer,
 )
 
-from models.tabformer_tokenizer import TabFormerTokenizer
 from models.hierarchical import TabFormerEmbeddings
 from models.tabformer_bert import TabFormerBertForMaskedLM, TabFormerBertConfig, TabFormerBertModel
 from models.tabformer_gpt2 import TabFormerGPT2LMHeadModel
@@ -71,9 +74,10 @@ class TabFormerBertLM:
                                           flatten=flatten,
                                           num_attention_heads=self.ncols)
 
-        self.tokenizer = BertTokenizer(vocab_file,
+        self.tokenizer = BertTokenizer(vocab_file = vocab_file,
                                        do_lower_case=False,
                                        **special_tokens)
+        print(self.tokenizer)
         self.model = self.get_model(field_ce, flatten, return_embeddings)
 
     def get_model(self, field_ce, flatten, return_embeddings):
@@ -93,17 +97,18 @@ class TabFormerBertLM:
 
         return model
 
-
 class TabFormerGPT2:
     def __init__(self, special_tokens, vocab, field_ce=False, flatten=False):
-
         self.vocab = vocab
         self.config = GPT2Config(vocab_size=len(self.vocab))
 
-        self.tokenizer = TabFormerTokenizer(
-            unk_token=special_tokens.unk_token,
-            bos_token=special_tokens.bos_token,
-            eos_token=special_tokens.eos_token
+        self.tokenizer = AutoTokenizer.from_pretrained("openai-community/gpt2-xl")
+        self.tokenizer.add_special_tokens(
+            special_tokens_dict=dict(
+                unk_token=special_tokens.unk_token,
+                bos_token=special_tokens.bos_token,
+                eos_token=special_tokens.eos_token,
+            )
         )
 
         self.model = self.get_model(field_ce, flatten)
@@ -114,7 +119,9 @@ class TabFormerGPT2:
         else:
             model = GPT2LMHeadModel(self.config)
         if not flatten:
-            tab_emb_config = ddict(vocab_size=len(self.vocab), hidden_size=self.config.hidden_size)
+            tab_emb_config = ddict(
+                vocab_size=len(self.vocab), hidden_size=self.config.hidden_size
+            )
             model = TabFormerBaseModel(model, TabFormerEmbeddings(tab_emb_config))
 
         return model

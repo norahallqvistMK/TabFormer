@@ -15,7 +15,7 @@ from misc.utils import random_split_dataset, get_save_steps_for_epoch
 from dataset.datacollator import TransDataCollatorForFineTuning
 from testing.test_fraud_utils import test_fraud_model, compute_metrics_fraud
 from models.lstm import build_baseline_model, PreTrainedModelWrapper
-
+from transformers import EarlyStoppingCallback
 
 logger = logging.getLogger(__name__)
 log = logger
@@ -71,7 +71,8 @@ def main(args):
     #only need pretrained model when creating downstream model with output embeddings from pretrained Tabformer 
     if use_embeddings: 
         print("CREATING EMBEDDING DATASET LOADER")
-        pretrained_model = TabFormerBertLM(custom_special_tokens,
+        pretrained_model = TabFormerBertLM(
+                                   custom_special_tokens,
                                    vocab=vocab,
                                    field_ce=args.field_ce,
                                    flatten=args.flatten,
@@ -107,7 +108,7 @@ def main(args):
                             pretrained_model=pretrained_model,
                             raw_dataset=dataset,
                             batch_size=batch_size, 
-                            force_recompute = True
+                            force_recompute = False
                             )
     
     model = build_baseline_model(baseline_model_type, use_embeddings, hidden_size, sequence_len, num_layers, input_size, field_input_size, vocab_length, args.equal_parameters_baselines)
@@ -157,28 +158,36 @@ def main(args):
     print("Numper savings steps per epoch", args.save_steps)
 
     data_collator = TransDataCollatorForFineTuning(tokenizer=None, mlm=False, mlm_probability=None)
-        
-    training_args = TrainingArguments(
-    num_train_epochs=epochs,
-    per_device_train_batch_size=batch_size,
-    per_device_eval_batch_size=batch_size,
+
+    early_stopping_callback = EarlyStoppingCallback(early_stopping_patience=5)
     
+    training_args = TrainingArguments(
     output_dir=args.output_dir,
-    overwrite_output_dir=True,
+    num_train_epochs=args.num_train_epochs,
     logging_dir=args.log_dir,
     
-    # For transformers 3.2.0, use these evaluation settings
-    evaluate_during_training=True,  # This is the key parameter in 3.2.0
-    logging_steps=args.save_steps,       # Log metrics every calc_steps
-    eval_steps=args.save_steps,          # Evaluate every calc_steps
     save_steps=args.save_steps,
-    
-    # Logging configuration
-    logging_first_step=True,
-    
     do_train=args.do_train,
     do_eval=args.do_eval,
-    save_total_limit=5,
+    
+    per_device_train_batch_size=args.batch_size,
+    per_device_eval_batch_size=args.batch_size,
+    save_total_limit=2,
+    
+    eval_strategy="epoch",
+    logging_strategy="epoch",
+    save_strategy="epoch",
+    
+    prediction_loss_only=False,  # Keep this False to enable compute_metrics
+    overwrite_output_dir=True,
+    # save_safetensors=False,
+    label_names=["labels"],
+    # Remove these lines that are causing the issue
+    metric_for_best_model="eval_F1_fraud",
+    greater_is_better=True,
+    load_best_model_at_end=True,
+        
+    # include_inputs_for_metrics=True  # Change this to True
     
     # Remove parameters not available in 3.2.0
     remove_unused_columns=False
@@ -193,7 +202,8 @@ def main(args):
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         compute_metrics=compute_metrics_fraud,
-        data_collator=data_collator
+        data_collator=data_collator,
+        callbacks=[early_stopping_callback],
     )
 
     trainer.train()

@@ -47,7 +47,8 @@ class TransactionDataset(Dataset):
                  stride=5,
                  adap_thres=10 ** 8,
                  return_labels=False,
-                 skip_user=False):
+                 skip_user=False, 
+                 vocab=None):
 
         self.root = root
         self.fname = fname
@@ -63,7 +64,7 @@ class TransactionDataset(Dataset):
 
         self.flatten = flatten
 
-        self.vocab = Vocabulary(adap_thres)
+        self.vocab = Vocabulary(adap_thres) if vocab is None else vocab
         self.seq_len = seq_len
         self.encoder_fit = {}
 
@@ -76,9 +77,11 @@ class TransactionDataset(Dataset):
         self.ncols = None
         self.num_bins = num_bins
         self.encode_data()
-        self.init_vocab()
+        if vocab is None:
+            self.init_vocab()
         self.prepare_samples()
-        self.save_vocab(vocab_dir)
+        if vocab is None:
+            self.save_vocab(vocab_dir)
 
     def __getitem__(self, index):
         real_index = self.indices[index]

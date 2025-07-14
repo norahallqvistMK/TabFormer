@@ -146,63 +146,78 @@ def binary_results_from_predictions(preds, labels):
         'f1_weighted': float(f1_weighted),
     }
 
-
 def print_statistics(probs, labels, output_dir):
-
     ### FIRST COMPUTE RESULTS NOT DEPENDENT FROM THRESHOLD 
     ### THEN TRY DIFFERENT THRESHOLDING POLICIES
-
     # COMPUTE ROC Area-Under-Curve
     roc_auc = roc_auc_score(labels, probs)
     # COMPUTE Precision-Recall Area-Under-Curve
     PR_auc_classes = average_precision_score(labels, probs, average=None)
     PR_auc_macro = average_precision_score(labels, probs, average='macro')
-
+    
     # Consider banal threshold of 0.5
     preds_05 = np.array(probs>0.5).astype(np.int32)
     results_05 = binary_results_from_predictions(preds_05, labels)
     logger.info(f'\nCOMPUTED RESULTS WITH thr=0.5 : \n{json.dumps(results_05, indent=4)}')
-
+    
     # estimate threshold from precision recall curve maximizing F1-Score
     precision_list, recall_list, thresholds_list = precision_recall_curve(labels, probs)
     assert min(thresholds_list)>=0 and max(thresholds_list)<=1, f'the thresholds are not in [0,1] but in [{min(thresholds_list)},{max(thresholds_list)}], \n->{thresholds_list}'
-    f1_list = (2*precision_list*recall_list)/(precision_list+recall_list)
+    
+    # FIX: Handle the length mismatch between precision/recall and thresholds
+    # precision_recall_curve returns n+1 precision/recall values but n threshold values
+    # We need to exclude the last precision/recall pair (which corresponds to threshold=infinity)
+    precision_for_f1 = precision_list[:-1]  # Remove last element
+    recall_for_f1 = recall_list[:-1]        # Remove last element
+    
+    # Calculate F1 scores with proper handling of division by zero
+    f1_list = []
+    for p, r in zip(precision_for_f1, recall_for_f1):
+        if p + r == 0:
+            f1_list.append(0)
+        else:
+            f1_list.append((2 * p * r) / (p + r))
+    f1_list = np.array(f1_list)
+    
+    # Now f1_list and thresholds_list have the same length
     index1 = np.nanargmax(f1_list)
     threshold_f1 = thresholds_list[index1]
-    preds_f1 = np.array(probs>threshold_f1).astype(np.int32)
+    preds_f1 = np.array(probs >= threshold_f1).astype(np.int32)  # Use >= instead of >
     results_f1 = binary_results_from_predictions(preds_f1, labels)
-    logger.info(f'\nCOMPUTED RESULTS WITH thr={round(threshold_f1,2)}, MAXIMIZING F1-SCORE : \n{json.dumps(results_f1, indent=4)}')
-
+    logger.info(f'\nCOMPUTED RESULTS WITH thr={round(threshold_f1,4)}, MAXIMIZING F1-SCORE : \n{json.dumps(results_f1, indent=4)}')
+    
     # estimate threshold from roc curve maximizing G-mean
     fpr, tpr, thresholds_roc = roc_curve(labels, probs)
     gmeans = np.sqrt(tpr * (1-fpr))
     index2 = np.nanargmax(gmeans)
     threshold_roc = thresholds_roc[index2]
-    preds_roc = np.array(probs>threshold_roc).astype(np.int32)
+    preds_roc = np.array(probs >= threshold_roc).astype(np.int32)  # Use >= instead of >
     results_roc = binary_results_from_predictions(preds_roc, labels)
-    logger.info(f'\nCOMPUTED RESULTS WITH thr={round(threshold_roc,2)}, MAXIMIZING G-MEAN : \n{json.dumps(results_roc, indent=4)}')
-
+    logger.info(f'\nCOMPUTED RESULTS WITH thr={round(threshold_roc,4)}, MAXIMIZING G-MEAN : \n{json.dumps(results_roc, indent=4)}')
+    
     # PLOT PRECISION RECALL CURVE WITH AVERAGE PRECISION AND F1 SCORE
     fig, ax = plt.subplots(1, 1, figsize=(10, 10))
     fig_img_rocauc = ax
     fig_img_rocauc.plot(recall_list, precision_list, label='precision recall curve')
-    fig_img_rocauc.plot(recall_list, f1_list, label='precision recall f1 score')
-    fig_img_rocauc.scatter(recall_list[index1], precision_list[index1], c='r', label='optimal threshold')
-    fig_img_rocauc.title.set_text('Image precision recall, AP-score: {0:.2f} F1-score: {1:.2f}%, Optimal Threshold: {2:.2f}'.format(PR_auc_macro, f1_list[index1], threshold_f1))
+    # For plotting F1, we need to pad f1_list to match the length of recall_list
+    f1_plot = np.append(f1_list, [0])  # Add zero for the last point
+    fig_img_rocauc.plot(recall_list, f1_plot, label='precision recall f1 score')
+    fig_img_rocauc.scatter(recall_for_f1[index1], precision_for_f1[index1], c='r', label='optimal threshold')
+    fig_img_rocauc.title.set_text('Image precision recall, AP-score: {0:.2f} F1-score: {1:.2f}%, Optimal Threshold: {2:.4f}'.format(PR_auc_macro, f1_list[index1], threshold_f1))
     fig_img_rocauc.legend(loc="lower right")
     fig.tight_layout()
     fig.savefig(os.path.join(output_dir, 'prec-rec_curve.png'), dpi=100)
-
+    
     # PLOT ROC CURVE WITH ROC-AUC AND G-MEAN SCORE
     fig, ax = plt.subplots(1, 1, figsize=(10, 10))
     fig_img_rocauc = ax
     fig_img_rocauc.plot(fpr, tpr, label='img_ROCAUC:{0:.3f}'.format(roc_auc))
     fig_img_rocauc.scatter(fpr[index2], tpr[index2], c='r', label='optimal threshold')
-    fig_img_rocauc.title.set_text('Image ROCAUC:{0:.3f}, G-MEAN: {1:.1f}%, Optimal Threshold: {2:.2f}'.format(roc_auc, gmeans[index2], threshold_roc))
+    fig_img_rocauc.title.set_text('Image ROCAUC:{0:.3f}, G-MEAN: {1:.1f}%, Optimal Threshold: {2:.4f}'.format(roc_auc, gmeans[index2], threshold_roc))
     fig_img_rocauc.legend(loc="lower right")
     fig.tight_layout()
     fig.savefig(os.path.join(output_dir, 'roc_curve.png'), dpi=100)
-
+    
     stats_dict = {
         'AUC': float(roc_auc),
         'Average-Precisions': float(PR_auc_classes),
