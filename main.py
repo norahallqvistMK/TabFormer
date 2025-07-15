@@ -4,16 +4,49 @@ import logging
 import numpy as np
 import torch
 import random
+from transformers import EarlyStoppingCallback
+import torch
+import torch.nn as nn
+
 # from args import define_main_parser
+
+# from transformers import DataCollatorForLanguageModeling, Trainer, TrainingArguments
+
+# from dataset.prsa import PRSADataset
+# from dataset.card import TransactionDataset
+# from models.modules import TabFormerBertLM, TabFormerGPT2
+from misc.utils import random_split_dataset, get_save_steps_for_epoch
+# from dataset.datacollator import TransDataCollatorForLanguageModeling
+from configs.train.args import define_main_parser
+
+
+from os import makedirs
+from os.path import join
+import logging
+import numpy as np
+import pandas as pd
+import torch
+import random
+
+from os import makedirs
+from os.path import join
+import logging
+import numpy as np
+import pandas as pd
+import torch
+import random
+
+from transformers.integrations import TensorBoardCallback
+
 
 from transformers import DataCollatorForLanguageModeling, Trainer, TrainingArguments
 
 from dataset.prsa import PRSADataset
 from dataset.card import TransactionDataset
 from models.modules import TabFormerBertLM, TabFormerGPT2
-from misc.utils import random_split_dataset, get_save_steps_for_epoch
 from dataset.datacollator import TransDataCollatorForLanguageModeling
-from configs.train.args import define_main_parser
+
+
 
 logger = logging.getLogger(__name__)
 log = logger
@@ -23,7 +56,7 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-
+    
 def main(args):
     # random seeds
     seed = args.seed
@@ -57,7 +90,8 @@ def main(args):
                                      stride=args.stride,
                                      flatten=args.flatten,
                                      return_labels=False,
-                                     skip_user=args.skip_user)
+                                     skip_user=args.skip_user,
+                                     seed = args.seed)
     elif args.data_type == 'prsa':
         dataset = PRSADataset(stride=args.stride,
                               mlm=args.mlm,
@@ -120,47 +154,54 @@ def main(args):
     args.save_steps = get_save_steps_for_epoch(args, train_dataset)
     print("Numper savings steps per epoch", args.save_steps)
 
+
+    early_stopping_callback = EarlyStoppingCallback(early_stopping_patience=5)
     training_args = TrainingArguments(
-        output_dir=args.output_dir,  # output directory
-        num_train_epochs=args.num_train_epochs,  # total number of training epochs
-        
-        logging_dir=args.log_dir,  # directory for storing logs
-        # logging_first_step=True,
+        output_dir=args.output_dir,
+        num_train_epochs=args.num_train_epochs,
+        logging_dir=args.log_dir,
         
         save_steps=args.save_steps,
         do_train=args.do_train,
-        
-        # evaluation_strategy="epoch",
-        prediction_loss_only=False,
-        overwrite_output_dir=True,
-
-        per_device_train_batch_size=args.batch_size,   # batch size per GPU
-        per_device_eval_batch_size=args.batch_size,    # eval batch size per GPU
-        save_total_limit=5,
-
         do_eval=args.do_eval,
-        evaluation_strategy="steps",
-        eval_steps=args.save_steps,
-        # logging_strategy="steps",  # Add this
-        logging_steps=args.save_steps,  # Add this - log at same frequency as eval
-        # evaluate_during_training=True,  # This is the key parameter in 3.2.0
+        
+        per_device_train_batch_size=args.batch_size,
+        per_device_eval_batch_size=args.batch_size,
+        save_total_limit=5,
+        
+        evaluation_strategy="epoch",
+        logging_strategy="epoch",
+        save_strategy="epoch",
+        # logging_first_step=True,
+        
+        prediction_loss_only=False,  # Keep this False to enable compute_metrics
+        overwrite_output_dir=True,
+        save_safetensors=False,
+        label_names=["labels"],
+        # Remove these lines that are causing the issue
+        metric_for_best_model="eval_loss",
+        greater_is_better=False,
+        load_best_model_at_end=True,
+        
+        # include_inputs_for_metrics=True  # Change this to True
     )
-
     print("Loading trainer")
     trainer = Trainer(
         model=tab_net.model,
         args=training_args,
         data_collator=data_collator,
         train_dataset=train_dataset,
-        eval_dataset=eval_dataset
+        eval_dataset=eval_dataset,
+        callbacks=[early_stopping_callback],
     )
 
     if args.checkpoint:
-        model_path = join(args.output_dir, f'checkpoint-{args.checkpoint}')
+        checkpoint_path = join(args.output_dir, f'checkpoint-{args.checkpoint}')
+        print(f"Resuming training from checkpoint: {checkpoint_path}")
+        trainer.train(resume_from_checkpoint=checkpoint_path)
     else:
-        model_path = args.output_dir
-
-    trainer.train(model_path=model_path)
+        print("Starting training from scratch")
+        trainer.train()
 
 
 if __name__ == "__main__":

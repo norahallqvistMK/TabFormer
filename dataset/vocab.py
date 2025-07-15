@@ -41,6 +41,62 @@ class Vocabulary:
             self.token2id[self.special_field_tag][token] = [global_id, local_id]
             self.id2token[global_id] = [token, self.special_field_tag, local_id]
 
+    def load_vocab(self, fname):
+        """Load vocabulary from file and reconstruct the vocabulary structure"""
+        self.filename = fname
+        
+        # Reset vocabulary structures
+        self.token2id = OrderedDict()
+        self.id2token = OrderedDict()
+        self.field_keys = OrderedDict()
+        
+        # Read the vocabulary file
+        with open(fname, "r") as fin:
+            lines = fin.readlines()
+        
+        # Process each line and reconstruct the vocabulary
+        for global_id, line in enumerate(lines):
+            line = line.strip()
+            if not line:
+                continue
+                
+            # Split field and token (format: FIELD_TOKEN)
+            field, token = line.split("_", 1)
+            
+            # Initialize field in token2id if not exists
+            if field not in self.token2id:
+                self.token2id[field] = OrderedDict()
+                self.field_keys[field] = None
+            
+            # Calculate local_id within the field
+            local_id = len(self.token2id[field])
+            
+            # Store in both mappings
+            self.token2id[field][token] = [global_id, local_id]
+            self.id2token[global_id] = [token, field, local_id]
+        
+        # Reconstruct special tokens list and adap_sm_cols if needed
+        self._reconstruct_special_attributes()
+        
+        return self
+    
+    def _reconstruct_special_attributes(self):
+        """Reconstruct special attributes after loading vocabulary"""
+        # Reconstruct adap_sm_cols based on field sizes
+        self.adap_sm_cols = set()
+        for field in self.field_keys:
+            if field != self.special_field_tag:
+                field_size = len(self.token2id[field])
+                if field_size > self.adap_thres:
+                    self.adap_sm_cols.add(field)
+
+    @classmethod
+    def from_file(cls, fname, adap_thres=10000, target_column_name="Is Fraud?"):
+        """Class method to create vocabulary instance from file"""
+        vocab = cls(adap_thres=adap_thres, target_column_name=target_column_name)
+        vocab.load_vocab(fname)
+        return vocab
+
     def set_id(self, token, field_name, return_local=False):
         global_id, local_id = None, None
 
@@ -58,21 +114,33 @@ class Vocabulary:
 
         return global_id
 
-    def get_id(self, token, field_name="", special_token=False, return_local=False):
+    def get_id(self, token, field_name="", special_token=False, return_local=False, handle_unknown=True):
+        """Enhanced get_id method that handles unknown tokens"""
         global_id, local_id = None, None
+        
         if special_token:
             field_name = self.special_field_tag
 
         if token in self.token2id[field_name]:
             global_id, local_id = self.token2id[field_name][token]
-
         else:
-            raise Exception(f"token {token} not found in field: {field_name}")
+            if handle_unknown:
+                # Return UNK token ID instead of raising exception
+                unk_global_id, unk_local_id = self.token2id[self.special_field_tag][self.unk_token]
+                if return_local:
+                    return unk_local_id
+                return unk_global_id
+            else:
+                raise Exception(f"token {token} not found in field: {field_name}")
 
         if return_local:
             return local_id
 
         return global_id
+
+    def has_token(self, token, field_name):
+        """Check if a token exists in the vocabulary for a given field"""
+        return field_name in self.token2id and token in self.token2id[field_name]
 
     def set_field_keys(self, keys):
 

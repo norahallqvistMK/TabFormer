@@ -7,6 +7,7 @@ import tqdm
 import pickle
 import logging
 from random import shuffle
+import random
 from sklearn.utils import resample
 from sklearn.preprocessing import LabelEncoder
 from sklearn.preprocessing import MinMaxScaler
@@ -30,7 +31,6 @@ log = logger
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-
 class TransactionDataset(Dataset):
     def __init__(self,
                  mlm,
@@ -48,7 +48,9 @@ class TransactionDataset(Dataset):
                  adap_thres=10 ** 8,
                  return_labels=False,
                  skip_user=False, 
-                 vocab=None):
+                 vocab=None,
+                 encoder_path=None, 
+                 seed = 2022):  # NEW: Add encoder_fit parameter
 
         self.root = root
         self.fname = fname
@@ -66,14 +68,14 @@ class TransactionDataset(Dataset):
 
         self.vocab = Vocabulary(adap_thres) if vocab is None else vocab
         self.seq_len = seq_len
-        self.encoder_fit = {}
+        self.encoder_fit = self.load_encoder_fit(encoder_path) if encoder_path is not None else {}  # NEW: Use provided encoder or empty dict
 
         self.trans_table = None
         self.data = []
         self.labels = []
         self.indices = []
         self.window_label = []
-
+        self.seed = seed 
         self.ncols = None
         self.num_bins = num_bins
         self.encode_data()
@@ -102,6 +104,23 @@ class TransactionDataset(Dataset):
         file_name = path.join(vocab_dir, f'vocab{self.fextension}.nb')
         log.info(f"saving vocab at {file_name}")
         self.vocab.save_vocab(file_name)
+
+    @staticmethod
+    def load_encoder_fit(encoder_path):
+        """
+        NEW: Static method to load encoder from file
+        """
+        try:
+            with open(encoder_path, "rb") as f:
+                encoder_fit = pickle.load(f)
+            log.info(f"loaded encoder from {encoder_path}")
+            return encoder_fit
+        except FileNotFoundError:
+            log.warning(f"encoder file {encoder_path} not found")
+            return None
+        except Exception as e:
+            log.error(f"error loading encoder from {encoder_path}: {e}")
+            return None
 
     @staticmethod
     def label_fit_transform(column, enc_type="label"):
@@ -294,17 +313,26 @@ class TransactionDataset(Dataset):
         dirname = path.join(self.root, "preprocessed")
         fname = f'{self.fname}{self.fextension}.encoded.csv'
         data_file = path.join(self.root, f"{self.fname}.csv")
-
+        encoder_fname = path.join(dirname, f'{self.fname}{self.fextension}.encoder_fit.pkl')
+    
+        # NEW: Check if we have a pre-loaded encoder
+        has_loaded_encoder = bool(self.encoder_fit)
+        
         if self.cached and path.isfile(path.join(dirname, fname)):
             log.info(f"cached encoded data is read from {fname}")
             self.trans_table = self.get_csv(path.join(dirname, fname))
-            encoder_fname = path.join(dirname, f'{self.fname}{self.fextension}.encoder_fit.pkl')
-            self.encoder_fit = pickle.load(open(encoder_fname, "rb"))
+            
+            # NEW: Only load encoder from file if we don't have a pre-loaded one
+            if not has_loaded_encoder and path.isfile(encoder_fname):
+                self.encoder_fit = pickle.load(open(encoder_fname, "rb"))
+                log.info(f"loaded encoder from cache: {encoder_fname}")
+            elif has_loaded_encoder:
+                log.info("using pre-loaded encoder")
             return
-
+    
         data = self.get_csv(data_file)
         log.info(f"{data_file} is read.")
-
+    
         log.info("nan resolution.")
         data['Errors?'] = self.nanNone(data['Errors?'])
         data['Is Fraud?'] = self.fraudEncoder(data['Is Fraud?'])
@@ -312,34 +340,107 @@ class TransactionDataset(Dataset):
         data['Merchant State'] = self.nanNone(data['Merchant State'])
         data['Use Chip'] = self.nanNone(data['Use Chip'])
         data['Amount'] = self.amountEncoder(data['Amount'])
-
+    
         sub_columns = ['Errors?', 'MCC', 'Zip', 'Merchant State', 'Merchant City', 'Merchant Name', 'Use Chip']
-
-        log.info("label-fit-transform.")
-        for col_name in tqdm.tqdm(sub_columns):
-            col_data = data[col_name]
-            col_fit, col_data = self.label_fit_transform(col_data)
-            self.encoder_fit[col_name] = col_fit
-            data[col_name] = col_data
-
-        log.info("timestamp fit transform")
-        timestamp = self.timeEncoder(data[['Year', 'Month', 'Day', 'Time']])
-        timestamp_fit, timestamp = self.label_fit_transform(timestamp, enc_type="time")
-        self.encoder_fit['Timestamp'] = timestamp_fit
-        data['Timestamp'] = timestamp
-
-        log.info("timestamp quant transform")
-        coldata = np.array(data['Timestamp'])
-        bin_edges, bin_centers, bin_widths = self._quantization_binning(coldata)
-        data['Timestamp'] = self._quantize(coldata, bin_edges)
-        self.encoder_fit["Timestamp-Quant"] = [bin_edges, bin_centers, bin_widths]
-
-        log.info("amount quant transform")
-        coldata = np.array(data['Amount'])
-        bin_edges, bin_centers, bin_widths = self._quantization_binning(coldata)
-        data['Amount'] = self._quantize(coldata, bin_edges)
-        self.encoder_fit["Amount-Quant"] = [bin_edges, bin_centers, bin_widths]
-
+    
+        # NEW: Use pre-loaded encoder if available, otherwise create new one
+        if has_loaded_encoder:
+            log.info("using pre-loaded encoder for label transformations")
+            for col_name in tqdm.tqdm(sub_columns):
+                col_data = data[col_name]
+                col_fit = self.encoder_fit[col_name]
+                
+                # Handle unknown labels for LabelEncoder
+                if hasattr(col_fit, 'classes_'):
+                    # Get unique values in current data
+                    unique_values = set(col_data.unique())
+                    known_values = set(col_fit.classes_)
+                    unknown_values = unique_values - known_values
+                    
+                    if unknown_values:
+                        log.warning(f"Found {len(unknown_values)} number unknown values in column '{col_name}': {len(unknown_values)}")
+                        
+                        # Create a mapping for unknown values
+                        # Option 1: Map to a special "UNKNOWN" class
+                        unknown_class = "<UNKNOWN>"
+                        if unknown_class not in col_fit.classes_:
+                            # Extend the encoder classes
+                            col_fit.classes_ = np.append(col_fit.classes_, unknown_class)
+                        
+                        # # Replace unknown values with the unknown class
+                        # col_data = col_data.replace(list(unknown_values), unknown_class)
+                        
+                        # Alternative Option 2: Map to most frequent class
+                        # most_frequent = col_fit.classes_[0]  # Assuming first class is most frequent
+                        # col_data = col_data.replace(list(unknown_values), most_frequent)
+                        
+                        # Alternative Option 3: Map to a specific index (e.g., 0)
+                        # col_data = col_data.replace(list(unknown_values), col_fit.classes_[0])
+                
+                data[col_name] = col_fit.transform(col_data)
+        else:
+            log.info("creating new encoder for label transformations")
+            for col_name in tqdm.tqdm(sub_columns):
+                col_data = data[col_name]
+                col_fit, col_data = self.label_fit_transform(col_data)
+                self.encoder_fit[col_name] = col_fit
+                data[col_name] = col_data
+    
+        # NEW: Handle timestamp encoding with pre-loaded encoder
+        if has_loaded_encoder and 'Timestamp' in self.encoder_fit:
+            log.info("using pre-loaded encoder for timestamp")
+            timestamp = self.timeEncoder(data[['Year', 'Month', 'Day', 'Time']])
+            timestamp_fit = self.encoder_fit['Timestamp']
+            
+            # Handle unknown timestamps (clip to known range)
+            if hasattr(timestamp_fit, 'data_min_') and hasattr(timestamp_fit, 'data_max_'):
+                timestamp_values = timestamp.iloc[:, 0].values  # Convert to numpy array
+                clipped_values = np.clip(timestamp_values, timestamp_fit.data_min_[0], timestamp_fit.data_max_[0])
+                timestamp.iloc[:, 0] = clipped_values
+                log.info(f"Clipped timestamp values to range [{timestamp_fit.data_min_[0]}, {timestamp_fit.data_max_[0]}]")
+            
+            data['Timestamp'] = timestamp_fit.transform(timestamp)
+        else:
+            log.info("creating new encoder for timestamp")
+            timestamp = self.timeEncoder(data[['Year', 'Month', 'Day', 'Time']])
+            timestamp_fit, timestamp = self.label_fit_transform(timestamp, enc_type="time")
+            self.encoder_fit['Timestamp'] = timestamp_fit
+            data['Timestamp'] = timestamp
+    
+        # NEW: Handle timestamp quantization with pre-loaded encoder
+        if has_loaded_encoder and 'Timestamp-Quant' in self.encoder_fit:
+            log.info("using pre-loaded encoder for timestamp quantization")
+            coldata = np.array(data['Timestamp'])
+            bin_edges, bin_centers, bin_widths = self.encoder_fit["Timestamp-Quant"]
+            
+            # Clip values to the known range before quantization
+            coldata = np.clip(coldata, bin_edges.min(), bin_edges.max())
+            
+            data['Timestamp'] = self._quantize(coldata, bin_edges)
+        else:
+            log.info("creating new encoder for timestamp quantization")
+            coldata = np.array(data['Timestamp'])
+            bin_edges, bin_centers, bin_widths = self._quantization_binning(coldata)
+            data['Timestamp'] = self._quantize(coldata, bin_edges)
+            self.encoder_fit["Timestamp-Quant"] = [bin_edges, bin_centers, bin_widths]
+    
+        # NEW: Handle amount quantization with pre-loaded encoder
+        if has_loaded_encoder and 'Amount-Quant' in self.encoder_fit:
+            log.info("using pre-loaded encoder for amount quantization")
+            coldata = np.array(data['Amount'])
+            bin_edges, bin_centers, bin_widths = self.encoder_fit["Amount-Quant"]
+            
+            # Clip values to the known range before quantization
+            coldata = np.clip(coldata, bin_edges.min(), bin_edges.max())
+            
+            data['Amount'] = self._quantize(coldata, bin_edges)
+        else:
+            log.info("creating new encoder for amount quantization")
+            coldata = np.array(data['Amount'])
+            bin_edges, bin_centers, bin_widths = self._quantization_binning(coldata)
+            data['Amount'] = self._quantize(coldata, bin_edges)
+            self.encoder_fit["Amount-Quant"] = [bin_edges, bin_centers, bin_widths]
+    
         columns_to_select = ['User',
                              'Card',
                              'Timestamp',
@@ -352,18 +453,25 @@ class TransactionDataset(Dataset):
                              'MCC',
                              'Errors?',
                              'Is Fraud?']
-
+    
         self.trans_table = data[columns_to_select]
-
+    
         log.info(f"writing cached csv to {path.join(dirname, fname)}")
         if not path.exists(dirname):
             os.mkdir(dirname)
         self.write_csv(self.trans_table, path.join(dirname, fname))
-
-        encoder_fname = path.join(dirname, f'{self.fname}{self.fextension}.encoder_fit.pkl')
-        log.info(f"writing cached encoder fit to {encoder_fname}")
-        pickle.dump(self.encoder_fit, open(encoder_fname, "wb"))
+    
+        # NEW: Only save encoder if we created it (not pre-loaded)
+        if not has_loaded_encoder:
+            log.info(f"writing cached encoder fit to {encoder_fname}")
+            pickle.dump(self.encoder_fit, open(encoder_fname, "wb"))
+        else:
+            log.info("skipping encoder save (using pre-loaded encoder)")
+            
     def resample_train(self, train_indices, test_indices, eval_indices=[]):
+        random.seed(self.seed)  # python 
+        np.random.seed(self.seed)  # numpy
+        torch.manual_seed(self.seed)  # torch
 
         train_real_indices = [self.indices[i] for i in train_indices]
         test_real_indices = [self.indices[i] for i in test_indices]
@@ -387,7 +495,7 @@ class TransactionDataset(Dataset):
         fraud_labels = train_labels[np.any(train_labels, axis=1)]
         logger.info(f'fraud indices shape: {fraud_real_indices.shape}')
         logger.info(f'fraud labels shape: {fraud_labels.shape}')
-        fraud_upsample_real_indices = resample(fraud_real_indices, replace=True, n_samples=non_fraud_labels.shape[0], random_state=2022)
+        fraud_upsample_real_indices = resample(fraud_real_indices, replace=True, n_samples=non_fraud_labels.shape[0], random_state=self.seed)
         logger.info(f'fraud upsample indices shape: {fraud_upsample_real_indices.shape}')
         train_real_indices = np.concatenate((fraud_upsample_real_indices,non_fraud_real_indices))
         logger.info(f'new train indices shape: {train_real_indices.shape}')
@@ -404,7 +512,7 @@ class TransactionDataset(Dataset):
         assert len(self.data) == len(self.labels), f'data {len(self.data)} != labels {len(self.labels)}'
         assert len(self.indices) > len(self.labels), f'indices {len(self.indices)} <= labels {len(self.labels)}'
         return train_indices, test_indices, eval_indices
-
+        
 
 class TransactionDatasetEmbedded(TransactionDataset):
     def __init__(self,
@@ -412,7 +520,8 @@ class TransactionDatasetEmbedded(TransactionDataset):
                 raw_dataset: TransactionDataset, 
                 batch_size,
                 cache_dir="./embeddings_cache",
-                force_recompute=False):
+                force_recompute=False, 
+                seed = 2022):
         
         self.pretrained_model = pretrained_model.model.to(device)
         self.pretrained_model.eval()
@@ -430,6 +539,7 @@ class TransactionDatasetEmbedded(TransactionDataset):
         self.data = []
         self.labels = []
         self.indices = []
+        self.seed = seed
         
         # Try to load from cache first
         if self._load_embeddings():
@@ -630,6 +740,11 @@ class TransactionDatasetEmbedded(TransactionDataset):
         return info
 
     def resample_train(self, train_indices, test_indices, eval_indices=[]):
+        random.seed(self.seed)  # python 
+        np.random.seed(self.seed)  # numpy
+        torch.manual_seed(self.seed)  # torch
+
+    
         train_real_indices = [self.indices[i] for i in train_indices]
         test_real_indices = [self.indices[i] for i in test_indices]
         eval_real_indices = [self.indices[i] for i in eval_indices]
@@ -667,7 +782,7 @@ class TransactionDatasetEmbedded(TransactionDataset):
         logger.info(f'fraud indices shape: {fraud_real_indices.shape}')
         logger.info(f'fraud labels shape: {fraud_labels.shape}')
         
-        fraud_upsample_real_indices = resample(fraud_real_indices, replace=True, n_samples=non_fraud_labels.shape[0], random_state=2022)
+        fraud_upsample_real_indices = resample(fraud_real_indices, replace=True, n_samples=non_fraud_labels.shape[0], random_state=self.seed)
         logger.info(f'fraud upsample indices shape: {fraud_upsample_real_indices.shape}')
         
         train_real_indices = np.concatenate((fraud_upsample_real_indices,non_fraud_real_indices))

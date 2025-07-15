@@ -3,7 +3,9 @@ import argparse
 def define_main_parser(parser=None):
     if parser is None:
         parser = argparse.ArgumentParser()
-
+    parser.add_argument("--encoder_path", type=str,
+                        default=None,
+                        help="path to pretrained encoder")
     parser.add_argument("--pooling_strategy", type=str,
                             default="mean",
                             help="pooling strategy of output embedding of encoder: mean[default]")  

@@ -10,6 +10,7 @@ from configs.finetune.args import define_main_parser
 from transformers import DataCollatorForLanguageModeling, Trainer, TrainingArguments
 from dataset.prsa import PRSADataset
 from dataset.card import TransactionDataset, TransactionDatasetEmbedded
+from dataset.vocab import Vocabulary
 from models.modules import TabFormerBertLM, TabFormerGPT2
 from misc.utils import random_split_dataset, get_save_steps_for_epoch
 from dataset.datacollator import TransDataCollatorForFineTuning
@@ -49,7 +50,11 @@ def main(args):
     use_embeddings = args.use_embeddings
     input_type = "EMBEDDING FROM PRETRAINED MODEL" if use_embeddings else "RAW FEATURES"
     print("RUNNNING TRAINING SCRIPT TO PRETRAIN DOWNSTREAM MODEL ON FRAUD PREDICTION WITH " + input_type)
-  
+    
+
+    vocab = Vocabulary.from_file("results/15072025_50k_v1/vocab.nb")
+
+        
     dataset = TransactionDataset(root=args.data_root,
                                     fname=args.data_fname,
                                     seq_len=args.seq_len,
@@ -62,7 +67,10 @@ def main(args):
                                     stride=args.stride,
                                     flatten=args.flatten,
                                     return_labels=True,
-                                    skip_user=args.skip_user)
+                                    skip_user=args.skip_user,
+                                    vocab = vocab,
+                                    encoder_path = args.encoder_path,
+                                    seed = args.seed)
 
 
     vocab = dataset.vocab
@@ -108,26 +116,13 @@ def main(args):
                             pretrained_model=pretrained_model,
                             raw_dataset=dataset,
                             batch_size=batch_size, 
-                            force_recompute = False
+                            force_recompute = False,
+                            seed = args.seed
                             )
     
     model = build_baseline_model(baseline_model_type, use_embeddings, hidden_size, sequence_len, num_layers, input_size, field_input_size, vocab_length, args.equal_parameters_baselines)
     model = PreTrainedModelWrapper(model)
 
-    # Fix 3: Handle DataParallel wrapper for multi-GPU
-    if isinstance(model, torch.nn.DataParallel):
-        # If model is wrapped in DataParallel, we need to access the underlying module
-        actual_model = model.module
-    else:
-        actual_model = model
-    
-    # Add config attribute if it doesn't exist (for transformers compatibility)
-    if not hasattr(actual_model, 'config'):
-        # Create a minimal config object
-        class MinimalConfig:
-            def __init__(self):
-                self.total_flos = 0
-        actual_model.config = MinimalConfig()
 
     # split dataset into train, val, test [0.6. 0.2, 0.2]
     totalN = len(dataset)
@@ -144,6 +139,26 @@ def main(args):
     log.info(f"# lengths: train [{trainN}]  valid [{valN}]  test [{testN}]")
     log.info("# lengths: train [{:.2f}]  valid [{:.2f}]  test [{:.2f}]".format(trainN / totalN, valN / totalN,
                                                                                testN / totalN))
+
+    # totalN = len(dataset)
+    # testN = 3000  # Fixed test set size
+    
+    # # Ensure we have enough samples
+    # if totalN < testN:
+    #     raise ValueError(f"Dataset size ({totalN}) is smaller than required test size ({testN})")
+    
+    # # Calculate remaining samples for train and validation
+    # remaining_samples = totalN - testN
+    # trainN = int(0.80 * remaining_samples)  # 80% of remaining for training
+    # valN = remaining_samples - trainN       # 25% of remaining for validation
+    
+    # assert totalN == trainN + valN + testN
+    
+    # lengths = [trainN, valN, testN]
+    
+    # log.info(f"# lengths: train [{trainN}]  valid [{valN}]  test [{testN}]")
+    # log.info("# lengths: train [{:.2f}]  valid [{:.2f}]  test [{:.2f}]".format(trainN / totalN, valN / totalN,
+    #                                                                            testN / totalN))
 
     train_dataset, eval_dataset, test_dataset = random_split_dataset(dataset, lengths)
     train_indices, test_indices, eval_indices = dataset.resample_train(train_dataset.indices, test_dataset.indices, eval_dataset.indices)

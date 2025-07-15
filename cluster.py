@@ -187,7 +187,7 @@ class EmbeddingAnalyzer:
         calinski_scores = []
         inertias = []
         
-        for n_clusters in cluster_range:
+        for n_clusters in tqdm.tqdm(cluster_range, desc="Evaluating clusters", unit="clusters"):
             kmeans = KMeans(n_clusters=n_clusters, random_state=self.config.random_state, n_init=10)
             cluster_labels = kmeans.fit_predict(data_for_clustering)
             
@@ -233,7 +233,7 @@ class EmbeddingAnalyzer:
         # t-SNE
         print("Computing t-SNE...")
         tsne = TSNE(n_components=2, perplexity=self.config.tsne_perplexity, 
-                   n_iter=self.config.tsne_n_iter, random_state=self.config.random_state)
+               max_iter=self.config.tsne_n_iter, random_state=self.config.random_state)
         self.tsne_embeddings = tsne.fit_transform(data_for_viz)
         
         # PCA 2D (separate from the main PCA for visualization)
@@ -968,7 +968,7 @@ def main(args):
         pretrained_model=pretrained_model,
         raw_dataset=raw_dataset,
         batch_size=args.batch_size, 
-        force_recompute=True
+        force_recompute=False
     )
 
     # Configuration
@@ -977,7 +977,7 @@ def main(args):
         apply_pca=True,
         pca_variance_threshold=0.95,
         min_clusters=2,
-        max_clusters=20,
+        max_clusters=4,
         random_state=42,
         output_dir=args.output_dir
     )
